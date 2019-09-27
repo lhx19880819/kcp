@@ -219,7 +219,7 @@ namespace KcpProject
 
         List<ackItem> acklist = new List<ackItem>(16);
 
-        byte[] buffer;
+        byte[] mFlushBuffer;
         Int32 reserved;
         Action<byte[], int> output; // buffer, size
 
@@ -249,7 +249,7 @@ namespace KcpProject
             ts_flush = IKCP_INTERVAL;
             ssthresh = IKCP_THRESH_INIT;
             dead_link = IKCP_DEADLINK;
-            buffer = new byte[mtu];
+            mFlushBuffer = new byte[mtu];
             output = output_;
         }
 
@@ -356,7 +356,6 @@ namespace KcpProject
         // user/upper level send, returns below zero for error
         public int Send(byte[] buffer, int index, int length)
         {
-
             if (0 == length) return -1;
             var readIndex = index;
 
@@ -404,6 +403,14 @@ namespace KcpProject
             }
 
             return readIndex - index;
+        }
+
+        public int SendConnect()
+        {
+            var seg = Segment.Get(0);
+            snd_queue.Add(seg);
+
+            return 0;
         }
 
         // update ack.
@@ -743,7 +750,7 @@ namespace KcpProject
             {
                 if (writeIndex + space > mtu)
                 {
-                    output(buffer, writeIndex);
+                    output(mFlushBuffer, writeIndex);
                     writeIndex = reserved;
                 }
             };
@@ -752,7 +759,7 @@ namespace KcpProject
             {
                 if (writeIndex > reserved)
                 {
-                    output(buffer, writeIndex);
+                    output(mFlushBuffer, writeIndex);
                 }
             };
 
@@ -765,7 +772,7 @@ namespace KcpProject
                 {
                     seg.sn = ack.sn;
                     seg.ts = ack.ts;
-                    writeIndex += seg.encode(buffer, writeIndex);
+                    writeIndex += seg.encode(mFlushBuffer, writeIndex);
                 }
             }
             acklist.Clear();
@@ -812,14 +819,14 @@ namespace KcpProject
             {
                 seg.cmd = IKCP_CMD_WASK;
                 makeSpace(IKCP_OVERHEAD);
-                writeIndex += seg.encode(buffer, writeIndex);
+                writeIndex += seg.encode(mFlushBuffer, writeIndex);
             }
 
             if ((probe & IKCP_ASK_TELL) != 0)
             {
                 seg.cmd = IKCP_CMD_WINS;
                 makeSpace(IKCP_OVERHEAD);
-                writeIndex += seg.encode(buffer, writeIndex);
+                writeIndex += seg.encode(mFlushBuffer, writeIndex);
             }
 
             probe = 0;
@@ -915,8 +922,8 @@ namespace KcpProject
 
                     var need = IKCP_OVERHEAD + segment.data.ReadableBytes;
                     makeSpace(need);
-                    writeIndex += segment.encode(buffer, writeIndex);
-                    Buffer.BlockCopy(segment.data.RawBuffer, segment.data.ReaderIndex, buffer, writeIndex, segment.data.ReadableBytes);
+                    writeIndex += segment.encode(mFlushBuffer, writeIndex);
+                    Buffer.BlockCopy(segment.data.RawBuffer, segment.data.ReaderIndex, mFlushBuffer, writeIndex, segment.data.ReadableBytes);
                     writeIndex += segment.data.ReadableBytes;
 
                     if (segment.xmit >= dead_link)
@@ -971,6 +978,36 @@ namespace KcpProject
                     incr = mss;
                 }
             }
+
+            return (UInt32)minrto;
+        }
+
+        public uint FlushConnect()
+        {
+            var segment = Segment.Get(0);
+            segment.conv = 1;
+
+            Action flushBuffer = () =>
+            {
+
+//                output(mFlushBuffer, 2);
+            };
+
+            var current = currentMS();
+            var minrto = (Int32)interval;
+
+            segment.encode(mFlushBuffer, 0);
+            Buffer.BlockCopy(segment.data.RawBuffer, segment.data.ReaderIndex, mFlushBuffer, 1, segment.data.ReadableBytes);
+
+            // get the nearest rto
+            var _rto = _itimediff(segment.resendts, current);
+            if (_rto > 0 && _rto < minrto)
+            {
+                minrto = _rto;
+            }
+
+            // flash remain segments
+            flushBuffer();
 
             return (UInt32)minrto;
         }
@@ -1058,7 +1095,7 @@ namespace KcpProject
 
             mtu = (UInt32)mtu_;
             mss = mtu - IKCP_OVERHEAD - (UInt32)reserved;
-            buffer = buffer_;
+            mFlushBuffer = buffer_;
             return 0;
         }
 
@@ -1116,3 +1153,4 @@ namespace KcpProject
         }
     }
 }
+
