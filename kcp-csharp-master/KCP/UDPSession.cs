@@ -36,7 +36,7 @@ namespace KcpProject
 
         public UDPSession()
         {
-            mConv = 1;//new Random().Next(1, Int32.MaxValue);
+            mConv = new Random().Next(1, Int32.MaxValue);
         }
 
         public void Connect(string host, int port)
